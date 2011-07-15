@@ -116,19 +116,31 @@ module Delayed
       return [success, failure]
     end
 
+    def forked!
+      ActiveRecord::Base.connection.reconnect!
+      Rails.cache.instance_variable_get(:@data).reset
+    end
+    
     def run(job)
       runtime =  Benchmark.realtime do
-        Timeout.timeout(self.class.max_run_time.to_i) { job.invoke_job }
-        job.destroy
+        fork do
+          forked!
+          begin
+            Timeout.timeout(self.class.max_run_time.to_i) { job.invoke_job }
+            job.destroy
+          rescue DeserializationError => error
+            job.last_error = "{#{error.message}\n#{error.backtrace.join('\n')}"
+            failed(job)
+          rescue Exception => error
+            handle_failed_job(job, error)
+            Kernel.exit!(1)  # work failed
+          end
+        Kernel.exit!(0)
+        end
+        Process.wait
       end
       say "#{job.name} completed after %.4f" % runtime
-      return true  # did work
-    rescue DeserializationError => error
-      job.last_error = "{#{error.message}\n#{error.backtrace.join('\n')}"
-      failed(job)
-    rescue Exception => error
-      handle_failed_job(job, error)
-      return false  # work failed
+      $?.exitstatus == 0
     end
 
     # Reschedule the job in the future (when a job fails).
