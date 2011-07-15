@@ -116,15 +116,10 @@ module Delayed
       return [success, failure]
     end
 
-    def forked!
-      ActiveRecord::Base.connection.reconnect!
-      Rails.cache.instance_variable_get(:@data).reset
-    end
-    
     def run(job)
       runtime =  Benchmark.realtime do
         fork do
-          forked!
+          ActiveRecord::Base.connection.reconnect!
           begin
             Timeout.timeout(self.class.max_run_time.to_i) { job.invoke_job }
             job.destroy
@@ -139,6 +134,7 @@ module Delayed
         end
         Process.wait
       end
+      ActiveRecord::Base.connection.reconnect!
       say "#{job.name} completed after %.4f" % runtime
       $?.exitstatus == 0
     end
