@@ -116,10 +116,24 @@ module Delayed
       return [success, failure]
     end
 
+    def fork_with_new_connection
+    config = ActiveRecord::Base.remove_connection
+    fork do
+      begin
+        ActiveRecord::Base.establish_connection(config)
+        ActiveRecord::Base.connection.reconnect!
+        yield
+      ensure
+        ActiveRecord::Base.remove_connection
+      end
+    end
+    ActiveRecord::Base.establish_connection(config)
+    ActiveRecord::Base.connection.reconnect!
+  end
+    
     def run(job)
       runtime =  Benchmark.realtime do
-        fork do
-          ActiveRecord::Base.connection.reconnect!
+        fork_with_new_connection do
           begin
             Timeout.timeout(self.class.max_run_time.to_i) { job.invoke_job }
             job.destroy
@@ -128,13 +142,13 @@ module Delayed
             failed(job)
           rescue Exception => error
             handle_failed_job(job, error)
+            say "FAILED"
             Kernel.exit!(1)  # work failed
           end
         Kernel.exit!(0)
         end
         Process.wait
       end
-      ActiveRecord::Base.connection.reconnect!
       say "#{job.name} completed after %.4f" % runtime
       $?.exitstatus == 0
     end
